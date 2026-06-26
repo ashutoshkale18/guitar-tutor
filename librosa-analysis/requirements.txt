@@ -1,0 +1,7 @@
+# Librosa Analysis venv - Strum/Tempo detection
+# Isolated from madmom to avoid numpy conflicts
+
+librosa>=0.11.0
+numpy>=2.0.0
+scipy>=1.10.0
+soundfile>=0.12.0
