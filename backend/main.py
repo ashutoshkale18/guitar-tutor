@@ -24,17 +24,22 @@ from fastapi.responses import FileResponse, JSONResponse
 from config import TEMP_DIR, HOST, PORT, DEMUCS_PYTHON, WHISPER_PYTHON, MADMOM_PYTHON, PIPER_EXE
 from orchestrator import run_pipeline, run_text_only_pipeline, cleanup_temp_files
 from middleware.rate_limit import RateLimitMiddleware
-from database.engine import get_db
+from database.engine import get_db, init_db
+from database import models  # ensures models are registered with Base.metadata
 from sqlalchemy.ext.asyncio import AsyncSession
 from auth.dependencies import get_ws_current_user
 from middleware.rate_limit import RateLimitMiddleware
 from auth.router import router as auth_router
 from routers import sessions, users
 
-# Add ffmpeg to PATH (WinGet install location)
-_ffmpeg_dir = r"C:\Users\susha\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0-full_build\bin"
-if os.path.isdir(_ffmpeg_dir) and _ffmpeg_dir not in os.environ.get("PATH", ""):
-    os.environ["PATH"] = _ffmpeg_dir + os.pathsep + os.environ["PATH"]
+# Add ffmpeg to PATH if a local copy exists (optional)
+_ffmpeg_candidates = [
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+]
+for _ffmpeg_dir in _ffmpeg_candidates:
+    if os.path.isdir(_ffmpeg_dir) and _ffmpeg_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _ffmpeg_dir + os.pathsep + os.environ["PATH"]
 
 # ============================================================
 # LOGGING
@@ -56,6 +61,13 @@ async def lifespan(application: FastAPI):
     logger.info("=" * 60)
     logger.info("  Guitar Tutor Backend Starting...")
     logger.info("=" * 60)
+
+    # Initialise database (creates tables if they don't exist)
+    try:
+        await init_db()
+        logger.info("  Database: OK (SQLite)")
+    except Exception as e:
+        logger.error(f"  Database init FAILED: {e}")
 
     checks = {
         "Demucs Python": os.path.isfile(DEMUCS_PYTHON),

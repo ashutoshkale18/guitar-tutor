@@ -23,27 +23,28 @@ TEMP_DIR.mkdir(exist_ok=True)
 STATIC_DIR = PROJECT_ROOT / "static" / "audio"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
+
 # ============================================================
-# EXTERNAL PYTHON INTERPRETERS (existing venvs)
+# EXTERNAL PYTHON INTERPRETERS (macOS)
 # ============================================================
-# Demucs audio separator (Python 3.9)
-DEMUCS_PYTHON = str(TUTOR_ROOT / "demucs-separator" / "venv" / "python.exe")
 
-# Whisper speech-to-text (Python 3.13)
-WHISPER_PYTHON = str(TUTOR_ROOT / "whisper-piper" / "venv" / "Scripts" / "python.exe")
+DEMUCS_PYTHON = "/Users/ashutoshkale/guitar-tutor/Instrument_Tutor_Backend/demucs-separator/venv/bin/python"
 
-# Madmom chord + note detection (Python 3.9)
-MADMOM_PYTHON = str(TUTOR_ROOT / "madmom-chords" / "venv" / "python.exe")
+WHISPER_PYTHON = "/Users/ashutoshkale/guitar-tutor/Instrument_Tutor_Backend/whisper-piper/venv/bin/python"
 
-# Librosa strum/tempo analysis (Python 3.13)
-LIBROSA_PYTHON = str(TUTOR_ROOT / "librosa-analysis" / "venv" / "Scripts" / "python.exe")
+MADMOM_PYTHON = "/Users/ashutoshkale/guitar-tutor/Instrument_Tutor_Backend/madmom-chords/venv/bin/python"
+
+LIBROSA_PYTHON = "/Users/ashutoshkale/guitar-tutor/Instrument_Tutor_Backend/librosa-analysis/venv/bin/python"
 
 # ============================================================
 # PIPER TTS BINARY
 # ============================================================
-PIPER_EXE = str(TUTOR_ROOT / "whisper-piper" / "piper" / "piper" / "piper.exe")
-PIPER_MODEL = str(TUTOR_ROOT / "whisper-piper" / "piper" / "piper" / "voices" / "en_US-amy-low.onnx")
 
+PIPER_EXE = str(TUTOR_ROOT / "whisper-piper" / "piper" / "piper")
+
+PIPER_MODEL = str(
+    TUTOR_ROOT / "whisper-piper" / "piper" / "voices" / "en_US-amy-low.onnx"
+)
 # ============================================================
 # WORKER SCRIPTS (in this project)
 # ============================================================

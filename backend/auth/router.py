@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -39,20 +40,42 @@ async def signup(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
     access_token = create_access_token(data={"sub": new_user.id})
     return {"access_token": access_token, "token_type": "bearer"}
 
-@router.post("/login", response_model=TokenResponse)
-async def login(user_data: UserLogin, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.username == user_data.username))
+
+async def _authenticate_user(username: str, password: str, db: AsyncSession) -> dict:
+    """Shared login logic for both JSON and form-based endpoints."""
+    result = await db.execute(select(User).where(User.username == username))
     user = result.scalars().first()
-    
-    if not user or not verify_password(user_data.password, user.password_hash):
+    if not user or not verify_password(password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-        
     access_token = create_access_token(data={"sub": user.id})
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(user_data: UserLogin, db: AsyncSession = Depends(get_db)):
+    """JSON-body login — used by the React frontend."""
+    return await _authenticate_user(user_data.username, user_data.password, db)
+
+
+@router.post(
+    "/token",
+    response_model=TokenResponse,
+    summary="OAuth2 form login (used by Swagger Authorize button)",
+)
+async def login_form(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Accepts application/x-www-form-urlencoded `username` + `password` fields.
+    This is what Swagger UI's Authorize button posts to.
+    """
+    return await _authenticate_user(form_data.username, form_data.password, db)
+
 
 @router.get("/me", response_model=UserResponse)
 async def read_users_me(current_user: User = Depends(get_current_user)):

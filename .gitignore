@@ -173,7 +173,8 @@ Instrument_Tutor_React_Ui/.vite/
 Thumbs.db
 desktop.ini
 ehthumbs.db
-
+backend/guitar_tutor.db
+*.db
 # ==============================================================
 # Logs
 # ==============================================================
