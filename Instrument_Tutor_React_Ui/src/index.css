@@ -1,0 +1,341 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+
+:root {
+  --bg-dark: #0A0A0E;
+  --text-primary: #FFFFFF;
+  --text-secondary: #A0A0AB;
+  
+  /* Neon Accents */
+  --neon-blue: #4285F4;
+  --neon-purple: #9B72CB;
+  --neon-coral: #D96570;
+
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-border: rgba(255, 255, 255, 0.08);
+
+  /* Chords */
+  --chord-major: #4285F4;
+  --chord-minor: #9B72CB;
+  --chord-other: #D96570;
+  --chord-none: rgba(255,255,255,0.1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: var(--bg-dark);
+  color: var(--text-primary);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Background */
+.ambient-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  background: 
+    radial-gradient(circle at 15% 50%, rgba(66, 133, 244, 0.08), transparent 25%),
+    radial-gradient(circle at 85% 30%, rgba(155, 114, 203, 0.08), transparent 25%),
+    radial-gradient(circle at 50% 80%, rgba(217, 101, 112, 0.08), transparent 25%);
+  pointer-events: none;
+}
+
+/* Glassmorphism */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: 24px;
+  transition: all 0.4s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Chat UI Overlays */
+.chat-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+  z-index: 10;
+  padding: 0; /* Changed from 20px to allow full scroll */
+}
+
+.messages-container {
+  flex: 1;
+  overflow-y: auto;
+  pointer-events: auto;
+  max-width: 800px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 100px 20px 140px 20px; /* Added top padding */
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  mask-image: linear-gradient(to bottom, transparent, black 10%, black);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 10%, black);
+}
+
+.message {
+  display: flex;
+  gap: 12px;
+  max-width: 80%;
+  animation: slideUp 0.3s ease-out forwards;
+}
+
+.message.user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.message.assistant {
+  align-self: flex-start;
+}
+
+.message-bubble {
+  padding: 16px 24px;
+  border-radius: 24px;
+  font-size: 1rem;
+  line-height: 1.5;
+  background: var(--glass-bg);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.03);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+}
+
+.message.user .message-bubble {
+  background: rgba(66, 133, 244, 0.2);
+  border-color: rgba(66, 133, 244, 0.2);
+  color: #fff;
+  border-bottom-right-radius: 8px;
+}
+
+.message.assistant .message-bubble {
+  background: rgba(255, 255, 255, 0.08);
+  border-bottom-left-radius: 8px;
+  color: var(--text-primary);
+}
+
+/* Audio Player in Chat */
+.audio-player-mini {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 12px;
+}
+.audio-player-mini button {
+  background: none;
+  border: none;
+  color: var(--neon-blue);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.audio-wave-mini {
+  display: flex;
+  gap: 2px;
+  height: 20px;
+  align-items: center;
+}
+.audio-wave-mini .bar {
+  width: 3px;
+  background: var(--neon-purple);
+  border-radius: 2px;
+  transition: height 0.1s ease;
+}
+
+/* Chord Chips */
+.chord-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.chord-chip {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: rgba(255,255,255,0.1);
+}
+.chord-chip.major { color: var(--chord-major); background: rgba(66, 133, 244, 0.15); }
+.chord-chip.minor { color: var(--chord-minor); background: rgba(155, 114, 203, 0.15); }
+.chord-chip.other { color: var(--chord-other); background: rgba(217, 101, 112, 0.15); }
+
+/* Chord Timeline Bar */
+.chord-timeline {
+  display: flex;
+  height: 24px;
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: 12px;
+  background: rgba(0,0,0,0.4);
+}
+.chord-segment {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  box-shadow: inset 1px 0 0 rgba(0,0,0,0.2);
+}
+
+/* Control Bar */
+.control-bar {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 800px;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: center;
+}
+
+.input-row {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  padding: 0 20px;
+}
+
+.text-input {
+  flex: 1;
+  background: var(--glass-bg);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--glass-border);
+  border-radius: 30px;
+  padding: 16px 24px;
+  color: white;
+  font-size: 1rem;
+  outline: none;
+  transition: all 0.3s;
+}
+
+.text-input:focus {
+  border-color: var(--neon-blue);
+  box-shadow: 0 0 20px rgba(66, 133, 244, 0.2);
+}
+
+.mic-btn {
+  width: 60px;
+  height: 60px;
+  border-radius: 30px;
+  background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+  border: none;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  box-shadow: 0 4px 15px rgba(66, 133, 244, 0.3);
+}
+
+.mic-btn.recording {
+  background: var(--neon-coral);
+  box-shadow: 0 0 30px rgba(217, 101, 112, 0.6);
+  transform: scale(1.1);
+  animation: pulseMic 1.5s infinite;
+}
+
+/* Pipeline Status */
+.pipeline-status {
+  display: flex;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  background: rgba(0,0,0,0.5);
+  padding: 8px 16px;
+  border-radius: 20px;
+  backdrop-filter: blur(8px);
+}
+
+.pipeline-step {
+  opacity: 0.5;
+  transition: all 0.3s;
+}
+
+.pipeline-step.active {
+  opacity: 1;
+  color: var(--neon-blue);
+  text-shadow: 0 0 10px rgba(66, 133, 244, 0.5);
+}
+
+.pipeline-step.done {
+  opacity: 0.8;
+  color: #fff;
+}
+
+/* Bento Grid */
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 40px 24px;
+}
+
+.bento-item-large { grid-column: span 2; grid-row: span 2; }
+.bento-item-wide { grid-column: span 2; }
+.bento-item-tall { grid-row: span 2; }
+
+@media (max-width: 900px) {
+  .bento-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .bento-grid { grid-template-columns: 1fr; }
+  .bento-item-large, .bento-item-wide, .bento-item-tall {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
+}
+
+/* Utils */
+.text-gradient {
+  background: linear-gradient(135deg, #FFFFFF 0%, #A0A0AB 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.text-gradient-neon {
+  background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple), var(--neon-coral));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulseMic {
+  0% { box-shadow: 0 0 0 0 rgba(217, 101, 112, 0.6); }
+  70% { box-shadow: 0 0 0 20px rgba(217, 101, 112, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(217, 101, 112, 0); }
+}
