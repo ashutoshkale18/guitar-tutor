@@ -67,7 +67,7 @@ def build_prompt(
         parts.append(f"[Student's question]: {user_text}")
 
     if not parts:
-        return "The student played guitar but didn't say anything. Provide brief encouraging feedback."
+        return "I couldn't hear any guitar playing or speech clearly. Could you please ask the student to try again or speak a little louder?"
 
     return "\n".join(parts)
 
@@ -76,7 +76,9 @@ async def query_llm(
     user_text: str,
     chord_data: list[dict] | None = None,
     note_data: list[dict] | None = None,
-    strum_data: dict | None = None
+    strum_data: dict | None = None,
+    history: list[dict] | None = None,
+    dynamic_system_prompt: str | None = None
 ) -> str:
     """
     Query LM Studio with the combined user text and analysis data.
@@ -97,12 +99,19 @@ async def query_llm(
     
     logger.info(f"Querying LLM with prompt: {prompt[:100]}...")
     
+    sys_prompt = dynamic_system_prompt if dynamic_system_prompt else SYSTEM_PROMPT
+    messages = [{"role": "system", "content": sys_prompt}]
+    
+    if history:
+        for msg in history:
+            role = "user" if msg["role"] == "user" else "assistant"
+            messages.append({"role": role, "content": msg["content"]})
+            
+    messages.append({"role": "user", "content": prompt})
+    
     payload = {
         "model": "local-llm",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt}
-        ],
+        "messages": messages,
         "temperature": 0.7,
         "max_tokens": 300
     }
@@ -129,6 +138,26 @@ async def query_llm(
         raise RuntimeError(f"Unexpected LM Studio response format: {response.text[:200]}")
     except Exception as e:
         raise RuntimeError(f"LLM query failed: {str(e)}")
+
+async def generate_title_from_prompt(user_text: str) -> str:
+    """Generate a short title (3-5 words) summarizing the user's first message."""
+    payload = {
+        "model": "local-llm",
+        "messages": [
+            {"role": "system", "content": "You are a title generator. Summarize the user's message in 2 to 4 words. Respond ONLY with the title. Do not include quotes or any other text."},
+            {"role": "user", "content": user_text}
+        ],
+        "temperature": 0.5,
+        "max_tokens": 10
+    }
+    try:
+        response = requests.post(LM_STUDIO_URL, json=payload, timeout=5)
+        if response.status_code == 200:
+            title = response.json()["choices"][0]["message"]["content"].strip(' "''\n')
+            return title if title else "New Chat"
+    except Exception:
+        pass
+    return "New Chat"
 
 
 async def check_llm_health() -> bool:

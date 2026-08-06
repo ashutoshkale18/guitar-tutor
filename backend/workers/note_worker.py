@@ -48,14 +48,68 @@ def midi_to_frequency(midi_num):
 # ============================================================
 # GUITAR NOTE RANGE FILTER
 # ============================================================
-# Standard guitar tuning: E2 (MIDI 40) to E6 (MIDI 88) roughly
-# Covers all frets on a standard 6-string guitar
+# Standard guitar tuning: E2 (MIDI 40) to C6 (MIDI 84)
+# Slightly tighter range than before to reduce false positives
 GUITAR_MIDI_LOW = 40   # E2 (lowest open string)
-GUITAR_MIDI_HIGH = 88  # E6 (highest practical fret)
+GUITAR_MIDI_HIGH = 84  # C6 (high frets, 24th fret on high E)
 
 def is_guitar_range(midi_num):
     """Check if a MIDI note is within typical guitar range."""
     return GUITAR_MIDI_LOW <= midi_num <= GUITAR_MIDI_HIGH
+
+
+# ============================================================
+# POST-PROCESSING: Deduplicate & Clean Notes
+# ============================================================
+def deduplicate_notes(notes, time_window_ms=80):
+    """
+    Merge notes that have the same pitch within a short time window.
+    This removes ghost notes / double-triggers from the RNN.
+    """
+    if not notes:
+        return notes
+    
+    cleaned = [notes[0]]
+    for note in notes[1:]:
+        prev = cleaned[-1]
+        time_diff_ms = (note["onset"] - prev["onset"]) * 1000
+        
+        # If same pitch and within time window, keep the stronger one
+        if note["midi"] == prev["midi"] and time_diff_ms < time_window_ms:
+            if note["velocity"] > prev["velocity"]:
+                cleaned[-1] = note  # Replace with stronger detection
+            # else: keep previous (stronger)
+        # If different pitch but extremely close (< 20ms), likely the same strum
+        # Keep both since guitar produces multiple simultaneous notes in a chord
+        else:
+            cleaned.append(note)
+    
+    return cleaned
+
+
+def merge_nearby_same_notes(notes, time_window_ms=120):
+    """
+    Second pass: merge same-pitch notes that are close together.
+    Guitar strings ring out and can re-trigger the RNN.
+    """
+    if len(notes) < 2:
+        return notes
+    
+    result = [notes[0]]
+    for note in notes[1:]:
+        prev = result[-1]
+        time_diff_ms = (note["onset"] - prev["onset"]) * 1000
+        
+        if note["midi"] == prev["midi"] and time_diff_ms < time_window_ms:
+            # Extend the duration of the previous note
+            new_end = note["onset"] + note["duration"]
+            prev_end = prev["onset"] + prev["duration"]
+            prev["duration"] = round(max(new_end, prev_end) - prev["onset"], 3)
+            prev["velocity"] = max(prev["velocity"], note["velocity"])
+        else:
+            result.append(note)
+    
+    return result
 
 
 # ============================================================
@@ -135,22 +189,23 @@ def main():
         from madmom.features.notes import RNNPianoNoteProcessor, NotePeakPickingProcessor
 
         # Step 1: Run RNN note processor
-        # This uses a recurrent neural network trained on piano/polyphonic music
-        # It outputs note activation probabilities over time
         note_processor = RNNPianoNoteProcessor()
         activations = note_processor(audio_file)
 
-        # Step 2: Peak picking to extract discrete note events
-        # fps=100 means 100 frames per second (10ms resolution)
-        # threshold controls sensitivity — lower = more notes detected
+        # Step 2: Peak picking with guitar-optimized parameters
+        # Key changes from original:
+        #   - threshold: 0.35 → 0.5 (fewer false positives from overtones)
+        #   - smooth: 0.09 → 0.12 (more smoothing to reduce ghost triggers)
+        #   - pre_avg/post_avg: wider windows for better peak discrimination
+        #   - pre_max/post_max: wider to avoid double-triggers
         peak_picker = NotePeakPickingProcessor(
             fps=100,
-            threshold=0.35,      # Detection sensitivity (0.0-1.0, lower = more sensitive)
-            smooth=0.09,         # Smoothing window in seconds
-            pre_avg=0.1,         # Pre-average window for onset detection
-            post_avg=0.1,        # Post-average window
-            pre_max=0.05,        # Pre-max window
-            post_max=0.05,       # Post-max window
+            threshold=0.5,       # Higher threshold = fewer false positives
+            smooth=0.12,         # More smoothing to reduce noise triggers
+            pre_avg=0.15,        # Wider pre-average window
+            post_avg=0.15,       # Wider post-average window
+            pre_max=0.08,        # Wider pre-max to avoid double-triggers
+            post_max=0.08,       # Wider post-max
         )
 
         notes_raw = peak_picker(activations)
@@ -165,8 +220,17 @@ def main():
                 duration = float(note_event[2]) if len(note_event) > 2 else 0.0
                 velocity = int(round(float(note_event[3]))) if len(note_event) > 3 else 80
 
-                # Filter to guitar range
+                # Filter 1: Must be in guitar range
                 if not is_guitar_range(midi):
+                    continue
+
+                # Filter 2: Minimum velocity (discard very quiet detections)
+                # These are usually overtones, string noise, or pickup hum
+                if velocity < 25:
+                    continue
+                
+                # Filter 3: Minimum duration (discard ultra-short ghost notes)
+                if duration > 0 and duration < 0.03:
                     continue
 
                 note_name = midi_to_note(midi)
@@ -186,8 +250,16 @@ def main():
         # Sort by onset time
         note_list.sort(key=lambda n: n["onset"])
 
-        # Extract unique notes
-        unique_notes = sorted(list(set(n["name"] for n in note_list)))
+        # Step 4: Post-processing — deduplicate ghost notes
+        note_list = deduplicate_notes(note_list, time_window_ms=80)
+        note_list = merge_nearby_same_notes(note_list, time_window_ms=120)
+
+        # Extract unique notes (sorted by pitch for readability)
+        unique_notes = sorted(
+            list(set(n["name"] for n in note_list)),
+            key=lambda name: NOTE_NAMES.index(name[:-1]) + int(name[-1]) * 12
+            if name[:-1] in NOTE_NAMES else 0
+        )
 
         print(json.dumps({
             "success": True,

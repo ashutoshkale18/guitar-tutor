@@ -17,12 +17,19 @@ import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from config import TEMP_DIR, HOST, PORT, DEMUCS_PYTHON, WHISPER_PYTHON, MADMOM_PYTHON, PIPER_EXE
 from orchestrator import run_pipeline, run_text_only_pipeline, cleanup_temp_files
+from middleware.rate_limit import RateLimitMiddleware
+from database.engine import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+from auth.dependencies import get_ws_current_user
+from middleware.rate_limit import RateLimitMiddleware
+from auth.router import router as auth_router
+from routers import sessions, users
 
 # Add ffmpeg to PATH (WinGet install location)
 _ffmpeg_dir = r"C:\Users\susha\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0-full_build\bin"
@@ -97,6 +104,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(RateLimitMiddleware)
+
+app.include_router(auth_router)
+app.include_router(sessions.router)
+app.include_router(users.router, prefix="/api/users", tags=["users"])
 
 # ============================================================
 # HEALTH CHECK
@@ -287,29 +299,26 @@ async def tts_endpoint(body: dict):
 # ============================================================
 
 @app.websocket("/ws/session")
-async def websocket_session(ws: WebSocket):
+async def websocket_session(
+    ws: WebSocket, 
+    token: str = Query(None), 
+    session_id: str = Query(None),
+    db: AsyncSession = Depends(get_db)
+):
     """
     WebSocket endpoint for real-time voice interaction.
-    
-    Protocol:
-        Client → Server:
-            - Binary frames: raw audio bytes (WAV)
-            - Text frames: JSON commands
-              {"type": "start_recording"}
-              {"type": "stop_recording"}
-              {"type": "text_input", "text": "..."}
-              
-        Server → Client:
-            - Text frames: JSON status/results
-              {"type": "status", "stage": "...", "message": "..."}
-              {"type": "transcription", "text": "..."}
-              {"type": "chords", "data": [...]}
-              {"type": "response", "text": "..."}
-              {"type": "audio", "data": "<base64>"}
-              {"type": "error", "message": "..."}
     """
+    try:
+        user = await get_ws_current_user(token, db)
+        user_id = user.id
+    except Exception as e:
+        await ws.accept()
+        await ws.send_json({"type": "error", "message": "Authentication failed"})
+        await ws.close()
+        return
+
     await ws.accept()
-    logger.info("WebSocket session started")
+    logger.info(f"WebSocket session started for user {user_id}, session {session_id}")
     
     audio_chunks: list[bytes] = []
     is_recording = False
@@ -337,15 +346,14 @@ async def websocket_session(ws: WebSocket):
                             # Combine audio chunks and process
                             audio_data = b"".join(audio_chunks)
                             audio_chunks = []
-                            
-                            await _process_audio_ws(ws, audio_data)
+                            await _process_audio_ws(ws, audio_data, user_id, session_id, db)
                         else:
                             await ws.send_json({"type": "error", "message": "No audio data received"})
                     
                     elif msg_type == "text_input":
                         text = data.get("text", "")
                         if text:
-                            await _process_text_ws(ws, text)
+                            await _process_text_ws(ws, text, user_id, session_id, db)
                         else:
                             await ws.send_json({"type": "error", "message": "No text provided"})
                     
@@ -367,7 +375,7 @@ async def websocket_session(ws: WebSocket):
             pass
 
 
-async def _process_audio_ws(ws: WebSocket, audio_data: bytes):
+async def _process_audio_ws(ws: WebSocket, audio_data: bytes, user_id: str, session_id: str, db: AsyncSession):
     """Process audio through the full pipeline and send results via WebSocket."""
     audio_id = uuid.uuid4().hex[:8]
     wav_path = str(TEMP_DIR / f"ws_{audio_id}.wav")
@@ -428,7 +436,13 @@ async def _process_audio_ws(ws: WebSocket, audio_data: bytes):
                 pass
         
         # Run pipeline
-        result = await run_pipeline(input_path, on_status=on_status)
+        result = await run_pipeline(
+            audio_path=input_path, 
+            user_id=user_id, 
+            session_id=session_id, 
+            db=db, 
+            on_status=on_status
+        )
         
         # Send transcription
         if result.user_text:
@@ -489,10 +503,15 @@ async def _process_audio_ws(ws: WebSocket, audio_data: bytes):
                     pass
 
 
-async def _process_text_ws(ws: WebSocket, text: str):
+async def _process_text_ws(ws: WebSocket, text: str, user_id: str, session_id: str, db: AsyncSession):
     """Process text-only input through LLM + TTS and send via WebSocket."""
     try:
-        result = await run_text_only_pipeline(text)
+        result = await run_text_only_pipeline(
+            text=text, 
+            user_id=user_id, 
+            session_id=session_id, 
+            db=db
+        )
         
         await ws.send_json({"type": "transcription", "text": text})
         

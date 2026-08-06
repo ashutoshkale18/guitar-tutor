@@ -7,7 +7,7 @@ import subprocess
 import logging
 import uuid
 
-from config import PIPER_EXE, PIPER_MODEL, TEMP_DIR
+from config import PIPER_EXE, PIPER_MODEL, TEMP_DIR, STATIC_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ async def synthesize_speech(text: str) -> str:
         RuntimeError: If TTS fails.
     """
     # Generate unique output filename
-    output_file = str(TEMP_DIR / f"tts_{uuid.uuid4().hex[:8]}.wav")
+    output_file = str(STATIC_DIR / f"tts_{uuid.uuid4().hex[:8]}.wav")
     
     logger.info(f"Generating speech: '{text[:50]}...'")
     

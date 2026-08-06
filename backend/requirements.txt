@@ -7,3 +7,14 @@ websockets>=14.0
 requests>=2.32.0
 python-multipart>=0.0.18
 aiofiles>=24.1.0
+
+# Database (MySQL + async)
+sqlalchemy>=2.0
+aiomysql>=0.2.0
+alembic>=1.13
+
+# Authentication
+python-jose[cryptography]>=3.3
+passlib[bcrypt]>=1.7
+bcrypt>=4.0
+pydantic[email]>=2.0

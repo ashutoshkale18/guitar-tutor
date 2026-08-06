@@ -18,6 +18,7 @@ import uuid
 import wave
 import struct
 import math
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from config import TEMP_DIR
@@ -26,8 +27,13 @@ from services.transcriber import transcribe_audio
 from services.chord_detector import detect_chords
 from services.note_detector import detect_notes
 from services.strum_detector import detect_strumming
-from services.llm_client import query_llm
+from services.llm_client import query_llm, generate_title_from_prompt
 from services.tts import synthesize_speech
+from services.memory_service import get_user_profile, record_detected_chords
+from services.context_builder import build_system_prompt
+from database.models import Message, Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +72,9 @@ class PipelineResult:
 
 async def run_pipeline(
     audio_path: str,
+    user_id: str = None,
+    session_id: str = None,
+    db: AsyncSession = None,
     on_status: Optional[Callable] = None
 ) -> PipelineResult:
     """
@@ -73,6 +82,9 @@ async def run_pipeline(
     
     Args:
         audio_path: Path to the raw audio file (WAV) from the user.
+        user_id: Optional user ID for saving to DB.
+        session_id: Optional session ID for saving to DB.
+        db: Optional database session.
         on_status: Optional callback for real-time status updates.
                    Called with (stage: str, message: str).
     
@@ -144,16 +156,69 @@ async def run_pipeline(
     
     await asyncio.gather(transcribe_task, *instrument_tasks)
     
+    # Save user message to database
+    current_msg_id = None
+    if db and session_id and result.user_text:
+        user_msg = Message(
+            session_id=session_id,
+            role="user",
+            content_type="text",
+            text_content=result.user_text
+        )
+        db.add(user_msg)
+        await db.commit()
+        current_msg_id = user_msg.id
+    
     # ── Step 3: Query LLM ─────────────────────────────────────
     await update_status("thinking", "Generating response from tutor AI...")
     
     try:
-        chord_data = result.chords if result.chords else None
-        note_data = result.notes if result.notes else None
-        strum_data = result.strumming if result.strumming else None
-        user_text = result.user_text if result.user_text else ""
+        history_list = None
+        if db and session_id:
+            # Check if we need to generate a title
+            session_result = await db.execute(select(Session).where(Session.id == session_id))
+            session = session_result.scalar_one_or_none()
+            
+            if session and session.title == "New Chat" and result.user_text:
+                new_title = await generate_title_from_prompt(result.user_text)
+                if new_title:
+                    session.title = new_title
+                    await db.commit()
+            
+            # Fetch last 10 messages for history (excluding the one we just saved)
+            if current_msg_id:
+                stmt = select(Message).where(Message.session_id == session_id, Message.id != current_msg_id).order_by(Message.created_at.desc()).limit(10)
+            else:
+                stmt = select(Message).where(Message.session_id == session_id).order_by(Message.created_at.desc()).limit(10)
+            msg_result = await db.execute(stmt)
+            recent_msgs = msg_result.scalars().all()
+            if recent_msgs:
+                history_list = []
+                for m in reversed(recent_msgs):
+                    if m.role in ["user", "assistant"] and m.text_content:
+                        history_list.append({"role": m.role, "content": m.text_content})
         
-        llm_response = await query_llm(user_text, chord_data, note_data, strum_data)
+        # Auto-update user memory with new chords
+        if result.chords:
+            unique_chords = list(set(c.get("chord") for c in result.chords if c.get("chord", "N") != "N"))
+            if unique_chords:
+                try:
+                    await record_detected_chords(user_id, unique_chords, required_plays=3, db=db)
+                except Exception as e:
+                    logger.error(f"Failed to record chords: {e}")
+
+        # Build dynamic prompt
+        profile = await get_user_profile(user_id, db)
+        dynamic_prompt = build_system_prompt(profile)
+        
+        llm_response = await query_llm(
+            user_text=result.user_text,
+            chord_data=result.chords,
+            note_data=result.notes,
+            strum_data=result.strumming,
+            history=history_list,
+            dynamic_system_prompt=dynamic_prompt
+        )
         result.llm_response = llm_response
         result.stages_completed.append("llm")
         
@@ -177,6 +242,33 @@ async def run_pipeline(
         logger.error(error_msg)
     
     result.total_time = time.time() - start_time
+    
+    # Save assistant message to database
+    if db and session_id and result.llm_response:
+        ai_msg = Message(
+            session_id=session_id,
+            role="assistant",
+            content_type="text",
+            text_content=result.llm_response,
+            json_data={
+                "chords": result.chords,
+                "unique_chords": result.unique_chords,
+                "notes": result.notes,
+                "unique_notes": result.unique_notes,
+                "strumming": result.strumming
+            },
+            audio_path=result.audio_response_path
+        )
+        db.add(ai_msg)
+        await db.commit()
+        
+        # Bump session.updated_at so sidebar sorts correctly
+        session_result = await db.execute(select(Session).where(Session.id == session_id))
+        session_obj = session_result.scalar_one_or_none()
+        if session_obj:
+            session_obj.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+    
     await update_status("complete", f"Pipeline complete in {result.total_time:.1f}s")
     
     return result
@@ -184,6 +276,9 @@ async def run_pipeline(
 
 async def run_text_only_pipeline(
     text: str,
+    user_id: str = None,
+    session_id: str = None,
+    db: AsyncSession = None,
     on_status: Optional[Callable] = None
 ) -> PipelineResult:
     """
@@ -192,6 +287,9 @@ async def run_text_only_pipeline(
     
     Args:
         text: User's text question.
+        user_id: Optional user ID for saving to DB.
+        session_id: Optional session ID for saving to DB.
+        db: Optional database session.
         on_status: Optional callback for status updates.
     
     Returns:
@@ -202,8 +300,52 @@ async def run_text_only_pipeline(
     
     result.user_text = text
     
+    # Save user message immediately to ensure correct chronological ordering
+    current_msg_id = None
+    if db and session_id:
+        user_msg = Message(
+            session_id=session_id,
+            role="user",
+            content_type="text",
+            text_content=text
+        )
+        db.add(user_msg)
+        await db.commit()
+        current_msg_id = user_msg.id
+        
     try:
-        llm_response = await query_llm(text, None)
+        history_list = None
+        if db and session_id:
+            # Title generation
+            session_result = await db.execute(select(Session).where(Session.id == session_id))
+            session = session_result.scalar_one_or_none()
+            if session and session.title == "New Chat" and text:
+                new_title = await generate_title_from_prompt(text)
+                if new_title:
+                    session.title = new_title
+                    await db.commit()
+                    
+            # History (exclude the current message we just saved)
+            if current_msg_id:
+                stmt = select(Message).where(Message.session_id == session_id, Message.id != current_msg_id).order_by(Message.created_at.desc()).limit(10)
+            else:
+                stmt = select(Message).where(Message.session_id == session_id).order_by(Message.created_at.desc()).limit(10)
+            msg_result = await db.execute(stmt)
+            recent_msgs = msg_result.scalars().all()
+            if recent_msgs:
+                history_list = []
+                for m in reversed(recent_msgs):
+                    if m.role in ["user", "assistant"] and m.text_content:
+                        history_list.append({"role": m.role, "content": m.text_content})
+                        
+        profile = await get_user_profile(user_id, db)
+        dynamic_prompt = build_system_prompt(profile)
+        
+        llm_response = await query_llm(
+            user_text=text,
+            history=history_list,
+            dynamic_system_prompt=dynamic_prompt
+        )
         result.llm_response = llm_response
         result.stages_completed.append("llm")
     except Exception as e:
@@ -218,6 +360,26 @@ async def run_text_only_pipeline(
         result.errors.append(f"TTS failed: {str(e)}")
     
     result.total_time = time.time() - start_time
+    
+    # Save assistant message to database
+    if db and session_id and result.llm_response:
+        ai_msg = Message(
+            session_id=session_id,
+            role="assistant",
+            content_type="text",
+            text_content=result.llm_response,
+            audio_path=result.audio_response_path
+        )
+        db.add(ai_msg)
+        await db.commit()
+        
+        # Bump session.updated_at so sidebar sorts correctly
+        session_result = await db.execute(select(Session).where(Session.id == session_id))
+        session_obj = session_result.scalar_one_or_none()
+        if session_obj:
+            session_obj.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+        
     return result
 
 

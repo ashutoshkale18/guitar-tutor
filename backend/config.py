@@ -19,6 +19,10 @@ PROJECT_ROOT = Path(__file__).parent.resolve()
 TEMP_DIR = PROJECT_ROOT / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
+# Static directory for persistent audio history
+STATIC_DIR = PROJECT_ROOT / "static" / "audio"
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
 # ============================================================
 # EXTERNAL PYTHON INTERPRETERS (existing venvs)
 # ============================================================
@@ -60,7 +64,7 @@ LM_STUDIO_TIMEOUT = 30  # seconds
 # ============================================================
 # WHISPER CONFIG
 # ============================================================
-WHISPER_MODEL_NAME = "tiny"  # tiny | base | small | medium | large
+WHISPER_MODEL_NAME = "base"  # tiny | base | small | medium | large
 
 # ============================================================
 # DEMUCS CONFIG

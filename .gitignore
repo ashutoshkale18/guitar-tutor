@@ -60,6 +60,10 @@ ehthumbs.db
 
 # ─── Project Plan (internal, not for public repo) ────────────
 plan.md
+multi-user-plan.md
+presentation_notes.md
+project_synopsis.md
+testing_plan.md
 
 # ─── Agents / AI config ─────────────────────────────────────
 .agents/

@@ -4,11 +4,10 @@ Called via subprocess by the gateway using the librosa-analysis venv.
 
 Detects:
   - Onset times (when each strum/pluck happens)
-  - Strum direction (upstroke vs downstroke via spectral centroid)
+  - Strum direction (upstroke vs downstroke via spectral centroid slope)
   - Strum strength (onset envelope amplitude)
-  - Tempo / BPM
+  - Tempo / BPM (onset-interval based, NOT beat_track)
   - Strum pattern string (e.g., "D-U-D-U")
-  - Beat positions
   - Tempo stability
 
 Usage:
@@ -62,40 +61,52 @@ def output_error(message):
     sys.exit(1)
 
 
-def classify_strum_direction(y, sr, onset_samples, spectral_centroids, centroid_times):
+def classify_strum_direction_slope(y, sr, onset_times, hop_length=512):
     """
-    Classify each strum as upstroke or downstroke.
+    Classify each strum as upstroke or downstroke using spectral centroid SLOPE.
     
-    Method: Spectral centroid analysis around each onset.
-    - Downstrokes typically have a brighter/higher initial attack because
-      the pick hits thicker (lower-pitched) strings first, producing a rising
-      spectral envelope.
-    - Upstrokes hit thinner (higher-pitched) strings first, producing a 
-      relatively darker/lower initial centroid.
+    Theory:
+    - Downstrokes: pick hits low strings (E2, A2) first, then sweeps to high strings.
+      This produces a RISING spectral centroid in the ~30ms after onset.
+    - Upstrokes: pick hits high strings (E4, B3) first, then sweeps to low strings.
+      This produces a FALLING spectral centroid after onset.
     
-    We compare each onset's centroid to the median centroid to classify.
+    We measure the slope of the spectral centroid in a 40ms window after each onset.
     """
+    import librosa
+    
+    # Compute spectral centroid at high time resolution
+    spectral_centroids = librosa.feature.spectral_centroid(
+        y=y, sr=sr, hop_length=hop_length
+    )[0]
+    
+    centroid_times = librosa.frames_to_time(
+        np.arange(len(spectral_centroids)), sr=sr, hop_length=hop_length
+    )
+    
     directions = []
+    analysis_window_ms = 40  # Look at centroid slope over 40ms after onset
     
-    if len(spectral_centroids) == 0 or len(onset_samples) == 0:
-        return ["down"] * len(onset_samples)
-    
-    # Get centroid values at onset positions
-    onset_centroids = []
-    for onset_sample in onset_samples:
-        onset_time = onset_sample / sr
-        # Find nearest centroid frame
-        idx = np.argmin(np.abs(centroid_times - onset_time))
-        onset_centroids.append(spectral_centroids[idx])
-    
-    if len(onset_centroids) == 0:
-        return ["down"] * len(onset_samples)
-    
-    # Compare to median: above median → downstroke, below → upstroke
-    median_centroid = np.median(onset_centroids)
-    
-    for centroid_val in onset_centroids:
-        if centroid_val >= median_centroid:
+    for onset_time in onset_times:
+        # Get centroid values in the window [onset, onset + 40ms]
+        window_start = onset_time
+        window_end = onset_time + (analysis_window_ms / 1000.0)
+        
+        mask = (centroid_times >= window_start) & (centroid_times <= window_end)
+        window_centroids = spectral_centroids[mask]
+        
+        if len(window_centroids) < 2:
+            # Not enough data points — default to downstroke
+            directions.append("down")
+            continue
+        
+        # Calculate slope using linear regression
+        x = np.arange(len(window_centroids))
+        slope = np.polyfit(x, window_centroids, 1)[0]
+        
+        # Positive slope = rising centroid = downstroke (low-to-high sweep)
+        # Negative slope = falling centroid = upstroke (high-to-low sweep)
+        if slope >= 0:
             directions.append("down")
         else:
             directions.append("up")
@@ -103,27 +114,83 @@ def classify_strum_direction(y, sr, onset_samples, spectral_centroids, centroid_
     return directions
 
 
-def calculate_tempo_stability(beat_times):
+def estimate_tempo_from_onsets(onset_times, min_bpm=40, max_bpm=220):
     """
-    Calculate how consistent the tempo is (0.0 to 1.0).
+    Estimate BPM from onset inter-onset intervals (IOI).
+    More reliable for guitar than librosa.beat.beat_track which is drum-focused.
+    
+    Method: Find the most common IOI and convert to BPM.
+    """
+    if len(onset_times) < 3:
+        return 0.0
+    
+    # Calculate inter-onset intervals
+    iois = np.diff(onset_times)
+    
+    # Filter to musically meaningful range
+    min_ioi = 60.0 / max_bpm  # ~0.27s at 220 BPM
+    max_ioi = 60.0 / min_bpm  # ~1.5s at 40 BPM
+    
+    valid_iois = iois[(iois >= min_ioi) & (iois <= max_ioi)]
+    
+    if len(valid_iois) < 2:
+        # Fallback: use all intervals
+        if len(iois) > 0:
+            median_ioi = np.median(iois)
+            if median_ioi > 0:
+                return round(60.0 / median_ioi, 1)
+        return 0.0
+    
+    # Use histogram to find the most common IOI
+    # This is more robust than simple median
+    n_bins = min(20, len(valid_iois))
+    hist, bin_edges = np.histogram(valid_iois, bins=n_bins)
+    peak_bin = np.argmax(hist)
+    dominant_ioi = (bin_edges[peak_bin] + bin_edges[peak_bin + 1]) / 2.0
+    
+    if dominant_ioi > 0:
+        bpm = 60.0 / dominant_ioi
+        # Clamp to reasonable range
+        bpm = max(min_bpm, min(max_bpm, bpm))
+        return round(bpm, 1)
+    
+    return 0.0
+
+
+def calculate_tempo_stability(onset_times):
+    """
+    Calculate how consistent the strumming tempo is (0.0 to 1.0).
+    Uses inter-onset intervals instead of beat times for guitar accuracy.
     1.0 = perfectly even spacing, 0.0 = completely irregular.
     """
-    if len(beat_times) < 3:
+    if len(onset_times) < 3:
         return 0.0
     
-    intervals = np.diff(beat_times)
-    if len(intervals) == 0:
+    intervals = np.diff(onset_times)
+    
+    # Remove outlier intervals (> 2x or < 0.5x the median)
+    median_int = np.median(intervals)
+    if median_int == 0:
         return 0.0
     
-    mean_interval = np.mean(intervals)
+    filtered = intervals[
+        (intervals >= median_int * 0.4) & 
+        (intervals <= median_int * 2.5)
+    ]
+    
+    if len(filtered) < 2:
+        return 0.0
+    
+    mean_interval = np.mean(filtered)
     if mean_interval == 0:
         return 0.0
     
     # Coefficient of variation (lower = more stable)
-    cv = np.std(intervals) / mean_interval
+    cv = np.std(filtered) / mean_interval
     
     # Convert to 0-1 scale (1 = stable)
-    stability = max(0.0, 1.0 - cv)
+    # cv of 0 = perfect, cv of 0.5 = very inconsistent
+    stability = max(0.0, min(1.0, 1.0 - (cv * 2.0)))
     return round(stability, 3)
 
 
@@ -148,8 +215,7 @@ def main():
         import librosa
         import soundfile  # Ensures soundfile backend is available
 
-        # ── Step 1: Load audio at original sample rate ─────────
-        # Use None for sr to preserve original sample rate for best quality
+        # ── Step 1: Load audio ────────────────────────────────
         y, sr = librosa.load(audio_file, sr=None, mono=True)
         
         duration = float(len(y) / sr)
@@ -157,21 +223,33 @@ def main():
         if duration < 0.5:
             output_error("Audio too short for strum analysis (need at least 0.5s)")
 
-        # ── Step 2: Onset detection (strum events) ────────────
-        # Detect onsets using a combination of spectral flux
+        # ── Step 2: Onset detection with adaptive threshold ───
+        # Use spectral flux for onset strength
         onset_env = librosa.onset.onset_strength(
             y=y, sr=sr,
             hop_length=512,
             aggregate=np.median
         )
         
-        # Detect onsets WITHOUT backtrack to get accurate peak strengths
+        # Calculate dynamic delta threshold based on audio energy
+        rms = librosa.feature.rms(y=y, hop_length=512)[0]
+        mean_rms = float(np.mean(rms))
+        
+        # Gentler dynamic delta — avoid being too aggressive
+        # quiet audio (rms < 0.01): delta = 0.03
+        # normal audio (rms ~0.05): delta = 0.06
+        # loud audio (rms > 0.1): delta = 0.1
+        dynamic_delta = max(0.03, min(0.12, mean_rms * 0.8 + 0.02))
+        
+        # Detect onsets WITHOUT backtrack — these are at the onset peaks
+        # (used for strength measurement)
         onset_frames_peak = librosa.onset.onset_detect(
             y=y, sr=sr,
             onset_envelope=onset_env,
             hop_length=512,
             backtrack=False,
-            units='frames'
+            units='frames',
+            delta=dynamic_delta
         )
         
         # Detect onsets WITH backtrack for accurate timing
@@ -180,70 +258,76 @@ def main():
             onset_envelope=onset_env,
             hop_length=512,
             backtrack=True,
-            units='frames'
+            units='frames',
+            delta=dynamic_delta
         )
         
         onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=512)
-        onset_samples = librosa.frames_to_samples(onset_frames, hop_length=512)
         
-        # Get onset strengths from peak frames (normalized 0-1)
-        onset_strengths = []
+        # ── Step 3: Measure strength from PEAK frames, filter weak ones ──
         max_env = float(np.max(onset_env)) if np.max(onset_env) > 0 else 1.0
-        for i, frame in enumerate(onset_frames):
-            # Use the peak frame for strength if available
-            peak_frame = onset_frames_peak[i] if i < len(onset_frames_peak) else frame
+        min_strength_threshold = 0.08  # Minimum 8% of peak strength
+        
+        filtered_indices = []
+        onset_strengths = []
+        for i in range(len(onset_frames)):
+            # Use peak frame for strength (not backtracked frame!)
+            peak_frame = onset_frames_peak[i] if i < len(onset_frames_peak) else onset_frames[i]
             if peak_frame < len(onset_env):
-                onset_strengths.append(round(float(onset_env[peak_frame]) / max_env, 3))
+                strength = float(onset_env[peak_frame]) / max_env
             else:
-                onset_strengths.append(0.5)
+                strength = 0.5
+            
+            if strength >= min_strength_threshold:
+                filtered_indices.append(i)
+                onset_strengths.append(round(strength, 3))
+        
+        # Apply filter
+        onset_times = onset_times[filtered_indices]
+        onset_frames = onset_frames[filtered_indices]
 
-        # ── Step 3: Spectral centroid for strum direction ──────
-        spectral_centroids = librosa.feature.spectral_centroid(
-            y=y, sr=sr, hop_length=512
-        )[0]  # Shape: (n_frames,)
-        
-        centroid_times = librosa.frames_to_time(
-            np.arange(len(spectral_centroids)), sr=sr, hop_length=512
-        )
-        
-        # Classify strum directions
-        directions = classify_strum_direction(
-            y, sr, onset_samples, spectral_centroids, centroid_times
+        # ── Step 4: Strum direction via spectral centroid slope ─
+        directions = classify_strum_direction_slope(
+            y, sr, onset_times, hop_length=512
         )
 
-        # ── Step 4: Tempo / BPM detection ─────────────────────
-        tempo_result = librosa.beat.beat_track(
-            y=y, sr=sr, hop_length=512
-        )
+        # ── Step 5: Tempo / BPM from onset intervals ──────────
+        # This is more accurate for guitar than beat_track (drum-optimized)
+        tempo_bpm = estimate_tempo_from_onsets(onset_times)
         
-        # librosa >= 0.10 returns (tempo_array, beats), older returns (tempo, beats)
+        # Also get beat positions from librosa for reference
+        tempo_result = librosa.beat.beat_track(y=y, sr=sr, hop_length=512)
         if isinstance(tempo_result[0], np.ndarray):
-            tempo_bpm = float(tempo_result[0][0]) if len(tempo_result[0]) > 0 else 0.0
+            librosa_bpm = float(tempo_result[0][0]) if len(tempo_result[0]) > 0 else 0.0
         else:
-            tempo_bpm = float(tempo_result[0])
+            librosa_bpm = float(tempo_result[0])
         
         beat_frames = tempo_result[1]
         beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
+        
+        # If our onset-based BPM is zero, fall back to librosa
+        if tempo_bpm == 0.0 and librosa_bpm > 0:
+            tempo_bpm = round(librosa_bpm, 1)
 
-        # ── Step 5: Tempo stability ───────────────────────────
-        tempo_stability = calculate_tempo_stability(beat_times)
+        # ── Step 6: Tempo stability from onset intervals ──────
+        tempo_stability = calculate_tempo_stability(onset_times)
 
-        # ── Step 6: Build strum events ────────────────────────
+        # ── Step 7: Build strum events ────────────────────────
         events = []
         for i in range(len(onset_times)):
             events.append({
                 "time": round(float(onset_times[i]), 3),
                 "direction": directions[i] if i < len(directions) else "down",
-                "strength": round(onset_strengths[i] if i < len(onset_strengths) else 0.5, 3)
+                "strength": onset_strengths[i] if i < len(onset_strengths) else 0.5
             })
 
-        # ── Step 7: Build pattern string ──────────────────────
+        # ── Step 8: Build pattern string ──────────────────────
         pattern = build_pattern_string(directions)
 
         # ── Output ────────────────────────────────────────────
         print(json.dumps({
             "success": True,
-            "tempo_bpm": round(tempo_bpm, 1),
+            "tempo_bpm": tempo_bpm,
             "pattern": pattern,
             "total_strums": len(events),
             "events": events,
