@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 
 const WS_URL = "ws://localhost:8000/ws/session";
 const API_URL = "http://localhost:8000";
@@ -41,13 +42,14 @@ function encodeWAV(samples, sampleRate) {
   return buffer;
 }
 
-export function useGuitarTutor() {
+export function useGuitarTutor(sessionId) {
+  const { token } = useAuth();
   const [status, setStatus] = useState("disconnected");
   const [pipelineStage, setPipelineStage] = useState("complete");
   const [messages, setMessages] = useState([]);
   const [isRecording, setIsRecording] = useState(false);
   const [uniqueChords, setUniqueChords] = useState([]);
-  
+
   const wsRef = useRef(null);
   const recStateRef = useRef({
     audioContext: null,
@@ -82,12 +84,33 @@ export function useGuitarTutor() {
         case "chords":
           if (msg.data && msg.data.length > 0) {
             setUniqueChords(msg.unique_chords || []);
-            addMessage({ 
-              role: "assistant", 
-              type: "chords", 
-              text: "Detected chords:", 
+            addMessage({
+              role: "assistant",
+              type: "chords",
+              text: "Detected chords:",
               chords: msg.data,
-              uniqueChords: msg.unique_chords 
+              uniqueChords: msg.unique_chords
+            });
+          }
+          break;
+        case "notes":
+          if (msg.data && msg.data.length > 0) {
+            addMessage({
+              role: "assistant",
+              type: "notes",
+              text: `Detected ${msg.data.length} note${msg.data.length !== 1 ? 's' : ''}:`,
+              notes: msg.data,
+              uniqueNotes: msg.unique_notes
+            });
+          }
+          break;
+        case "strumming":
+          if (msg.data) {
+            addMessage({
+              role: "assistant",
+              type: "strumming",
+              text: "Strumming analysis:",
+              strumming: msg.data
             });
           }
           break;
@@ -124,7 +147,7 @@ export function useGuitarTutor() {
       if (cancelled) return;
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
 
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(`${WS_URL}?token=${token}&session_id=${sessionId}`);
       ws.onopen = () => setStatus("connected");
       ws.onclose = () => {
         setStatus("disconnected");
@@ -141,14 +164,45 @@ export function useGuitarTutor() {
       wsRef.current = ws;
     }
 
-    connect();
+    if (!sessionId || !token) {
+      setMessages([]);
+      return;
+    }
+
+    // Load history
+    fetch(`${API_URL}/api/sessions/${sessionId}`, {
+      headers: { "Authorization": `Bearer ${token}` }
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (!cancelled && data.messages) {
+          const history = data.messages.map(msg => ({
+            id: msg.id,
+            role: msg.role,
+            type: msg.content_type,
+            text: msg.text_content,
+            chords: msg.json_data?.chords,
+            uniqueChords: msg.json_data?.unique_chords,
+            notes: msg.json_data?.notes,
+            uniqueNotes: msg.json_data?.unique_notes,
+            strumming: msg.json_data?.strumming,
+            audioUrl: msg.audio_path ? `${API_URL}/api/sessions/audio/${msg.audio_path.split(/[\\/]/).pop()}` : undefined
+          }));
+          setMessages(history);
+          connect();
+        }
+      })
+      .catch(err => {
+        console.error("Failed to load session history", err);
+        connect();
+      });
 
     return () => {
       cancelled = true;
       clearTimeout(timeout);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [addMessage]);
+  }, [addMessage, sessionId, token]);
 
   // --- Recording: click to start, click to stop ---
   const doStartRecording = useCallback(async () => {
@@ -157,12 +211,18 @@ export function useGuitarTutor() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        audio: {
+          echoCancellation: true,      // Keep echo cancellation to prevent feedback
+          noiseSuppression: false,     // Disable — it clips guitar frequencies
+          autoGainControl: true,       // Enable — boosts quiet microphone volumes!
+          sampleRate: { ideal: 44100 } // Request higher quality from mic
+        }
       });
 
-      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      // Use 44100Hz for high-quality capture, we'll downsample to 16kHz when encoding WAV
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
       const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      const processor = ctx.createScriptProcessor(8192, 1, 1); // Larger buffer = fewer glitches
 
       rec.audioContext = ctx;
       rec.audioSource = source;
@@ -227,15 +287,15 @@ export function useGuitarTutor() {
       offset += buf.length;
     }
 
-    const durationSec = totalLength / 16000;
-    console.log(`Audio captured: ${durationSec.toFixed(1)}s`);
+    const durationSec = totalLength / 44100;
+    console.log(`Audio captured: ${durationSec.toFixed(1)}s (44.1kHz)`);
 
     if (durationSec < 0.5) {
       addMessage({ role: "assistant", text: "⚠️ Recording too short. Hold for at least 1 second." });
       return;
     }
 
-    const wavBuffer = encodeWAV(combined, 16000);
+    const wavBuffer = encodeWAV(combined, 44100);
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(wavBuffer);
@@ -265,15 +325,15 @@ export function useGuitarTutor() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text })
       })
-      .then(r => r.json())
-      .then(data => {
-        pendingUserTextRef.current = null;
-        addMessage({ role: "assistant", text: data.response });
-      })
-      .catch(err => {
-        pendingUserTextRef.current = null;
-        addMessage({ role: "assistant", text: `⚠️ Error: ${err.message}` });
-      });
+        .then(r => r.json())
+        .then(data => {
+          pendingUserTextRef.current = null;
+          addMessage({ role: "assistant", text: data.response });
+        })
+        .catch(err => {
+          pendingUserTextRef.current = null;
+          addMessage({ role: "assistant", text: `⚠️ Error: ${err.message}` });
+        });
     }
   }, [addMessage]);
 

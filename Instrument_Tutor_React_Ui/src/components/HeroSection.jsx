@@ -1,9 +1,11 @@
 import React, { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { motion } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import AIOrb from './AIOrb';
 
 const HeroSection = () => {
+  const navigate = useNavigate();
   return (
     <section className="hero-section" style={{ height: '100vh', position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
       
@@ -41,10 +43,25 @@ const HeroSection = () => {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 0.4, ease: "easeOut" }}
-          style={{ marginTop: '3rem', pointerEvents: 'auto' }}
+          style={{ marginTop: '3rem', pointerEvents: 'auto', display: 'flex', gap: '16px', justifyContent: 'center' }}
         >
-          <button className="glass-panel" style={{ padding: '16px 32px', fontSize: '1.1rem', fontWeight: 600, color: '#fff', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '30px' }}>
+          <button 
+            onClick={() => navigate('/signup')}
+            style={{ padding: '16px 32px', fontSize: '1.1rem', fontWeight: 600, color: '#0a0a0e', background: 'linear-gradient(to right, #9db6f7, #5f7ce8)', cursor: 'pointer', border: 'none', borderRadius: '30px', transition: 'all 0.3s' }}
+            onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
+            onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+          >
             Start Learning Now
+          </button>
+          
+          <button 
+            onClick={() => navigate('/login')}
+            className="glass-panel" 
+            style={{ padding: '16px 32px', fontSize: '1.1rem', fontWeight: 600, color: '#fff', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '30px', background: 'rgba(255,255,255,0.05)', transition: 'all 0.3s' }}
+            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+          >
+            Log In
           </button>
         </motion.div>
       </div>

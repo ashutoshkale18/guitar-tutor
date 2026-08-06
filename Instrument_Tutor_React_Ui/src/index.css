@@ -1,5 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
 
+@import "tailwindcss";
+
 :root {
   --bg-dark: #0A0A0E;
   --text-primary: #FFFFFF;
@@ -24,6 +26,28 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* Custom Scrollbar — thin, transparent, auto-hiding */
+*::-webkit-scrollbar {
+  width: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  transition: background 0.3s ease;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
 body {
@@ -72,22 +96,32 @@ body {
   flex-direction: column;
   pointer-events: none;
   z-index: 10;
-  padding: 0; /* Changed from 20px to allow full scroll */
+  padding: 0;
+  overflow-y: auto;         /* ← scrollbar on the full-width overlay */
+  pointer-events: auto;
 }
 
 .messages-container {
   flex: 1;
-  overflow-y: auto;
-  pointer-events: auto;
   max-width: 800px;
   width: 100%;
   margin: 0 auto;
-  padding: 100px 20px 140px 20px; /* Added top padding */
+  padding: 100px 20px 0px 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  overflow-y: auto;
+  pointer-events: auto;
   mask-image: linear-gradient(to bottom, transparent, black 10%, black);
   -webkit-mask-image: linear-gradient(to bottom, transparent, black 10%, black);
+}
+
+.messages-container::-webkit-scrollbar {
+  display: none;
+}
+.messages-container {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
 }
 
 .message {
@@ -205,12 +239,10 @@ body {
 
 /* Control Bar */
 .control-bar {
-  position: absolute;
-  bottom: 40px;
-  left: 50%;
-  transform: translateX(-50%);
   width: 100%;
   max-width: 800px;
+  margin: 0 auto;
+  padding: 10px 20px 40px 20px;
   pointer-events: auto;
   display: flex;
   flex-direction: column;
