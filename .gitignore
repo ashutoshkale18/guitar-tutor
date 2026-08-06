@@ -1,4 +1,78 @@
 # ==============================================================
+#  Guitar Tutor — .gitignore
+# ==============================================================
+
+# ─── Python Virtual Environments (all venvs) ──────────────────
+**/venv/
+**/env/
+**/.venv/
+
+# ─── Python Cache ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+
+# ─── Temp / Generated Files ──────────────────────────────────
+backend/temp/
+demucs-separator/output/
+
+# ─── Audio Test Files ─────────────────────────────────────────
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# ─── ML Models (downloaded at runtime, too large for git) ────
+whisper-piper/piper/
+whisper-piper/whisper.cpp/
+whisper-piper/*.wav
+
+# ─── Frontend (has its own git repos / node_modules) ─────────
+Main/
+
+# ─── Librosa Analysis venv (auto-created by setup) ───────────
+librosa-analysis/venv/
+
+# ─── Demucs models cache (downloaded on first run) ───────────
+torch/
+*.pt
+*.pth
+*.onnx
+
+# ─── IDE / Editor ────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ─── OS Files ────────────────────────────────────────────────
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ─── Project Plan (internal, not for public repo) ────────────
+plan.md
+multi-user-plan.md
+presentation_notes.md
+project_synopsis.md
+testing_plan.md
+
+# ─── Agents / AI config ─────────────────────────────────────
+.agents/
+.gemini/
+
+# ─── Logs ────────────────────────────────────────────────────
+*.log
+
+# ==============================================================
 # Guitar Tutor - Root .gitignore
 # ==============================================================
 
